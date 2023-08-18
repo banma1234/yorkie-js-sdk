@@ -16,10 +16,14 @@
 
 import { assert } from 'chai';
 import * as sinon from 'sinon';
-import { EventCollector } from '@yorkie-js-sdk/test/helper/helper';
+import { waitStubCallCount } from '@yorkie-js-sdk/test/helper/helper';
 
 import { MaxTimeTicket } from '@yorkie-js-sdk/src/document/time/ticket';
-import { Document } from '@yorkie-js-sdk/src/document/document';
+import {
+  Document,
+  DocEvent,
+  DocEventType,
+} from '@yorkie-js-sdk/src/document/document';
 import { OperationInfo } from '@yorkie-js-sdk/src/document/operation/operation';
 import { JSONArray, Text, Counter, Tree } from '@yorkie-js-sdk/src/yorkie';
 import { CounterType } from '@yorkie-js-sdk/src/document/crdt/counter';
@@ -940,92 +944,116 @@ describe('Document', function () {
 
   it('changeInfo test for object', async function () {
     const doc = new Document<any>('test-doc');
-
-    type EventForTest = Array<OperationInfo>;
-    const eventCollector = new EventCollector<EventForTest>();
-    const stub = sinon.stub().callsFake((event) => {
-      eventCollector.add(event.value.operations);
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    const expectedOps: Array<OperationInfo> = [];
+    const ops: Array<OperationInfo> = [];
+    const stub1 = sinon.stub().callsFake((event: DocEvent) => {
+      if (event.type !== DocEventType.LocalChange) return;
+      const { operations } = event.value;
+      ops.push(...operations);
     });
-    const unsub = doc.subscribe(stub);
+    const unsub1 = doc.subscribe(stub1);
 
     doc.update((root) => {
       root[''] = {};
+      expectedOps.push({ type: 'set', path: '$', key: '' });
       root.obj = {};
+      expectedOps.push({ type: 'set', path: '$', key: 'obj' });
       root.obj.a = 1;
+      expectedOps.push({ type: 'set', path: '$.obj', key: 'a' });
       delete root.obj.a;
+      expectedOps.push({ type: 'remove', path: '$.obj', key: 'a' });
       root.obj['$hello'] = 1;
+      expectedOps.push({ type: 'set', path: '$.obj', key: '$hello' });
       delete root.obj['$hello'];
+      expectedOps.push({ type: 'remove', path: '$.obj', key: '$hello' });
       delete root.obj;
+      expectedOps.push({ type: 'remove', path: '$', key: 'obj' });
     });
+    await waitStubCallCount(stub1, 1);
+    assert.deepEqual(
+      ops,
+      expectedOps,
+      `actual: ${JSON.stringify(ops)} \n expected: ${JSON.stringify(
+        expectedOps,
+      )}`,
+    );
 
-    await eventCollector.waitAndVerifyNthEvent(1, [
-      { type: 'set', path: '$', key: '' },
-      { type: 'set', path: '$', key: 'obj' },
-      { type: 'set', path: '$.obj', key: 'a' },
-      { type: 'remove', path: '$.obj', key: 'a' },
-      { type: 'set', path: '$.obj', key: '$hello' },
-      { type: 'remove', path: '$.obj', key: '$hello' },
-      { type: 'remove', path: '$', key: 'obj' },
-    ]);
-
-    unsub();
+    unsub1();
   });
 
   it('changeInfo test for array', async function () {
     const doc = new Document<any>('test-doc');
-    type EventForTest = Array<OperationInfo>;
-    const eventCollector = new EventCollector<EventForTest>();
-    const stub = sinon.stub().callsFake((event) => {
-      eventCollector.add(event.value.operations);
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    const expectedOps: Array<OperationInfo> = [];
+    const ops: Array<OperationInfo> = [];
+    const stub1 = sinon.stub().callsFake((event: DocEvent) => {
+      if (event.type !== DocEventType.LocalChange) return;
+      const { operations } = event.value;
+      ops.push(...operations);
     });
-    const unsub = doc.subscribe(stub);
+    const unsub1 = doc.subscribe(stub1);
 
     doc.update((root) => {
       root.arr = [];
+      expectedOps.push({ type: 'set', path: '$', key: 'arr' });
       root.arr.push(0);
+      expectedOps.push({ type: 'add', path: '$.arr', index: 0 });
       root.arr.push(1);
+      expectedOps.push({ type: 'add', path: '$.arr', index: 1 });
       delete root.arr[1];
+      expectedOps.push({ type: 'remove', path: '$.arr', index: 1 });
       root['$$hello'] = [];
+      expectedOps.push({ type: 'set', path: '$', key: '$$hello' });
       root['$$hello'].push(0);
+      expectedOps.push({ type: 'add', path: '$.$$hello', index: 0 });
     });
+    await waitStubCallCount(stub1, 1);
+    assert.deepEqual(
+      ops,
+      expectedOps,
+      `actual: ${JSON.stringify(ops)} \n expected: ${JSON.stringify(
+        expectedOps,
+      )}`,
+    );
 
-    await eventCollector.waitAndVerifyNthEvent(1, [
-      { type: 'set', path: '$', key: 'arr' },
-      { type: 'add', path: '$.arr', index: 0 },
-      { type: 'add', path: '$.arr', index: 1 },
-      { type: 'remove', path: '$.arr', index: 1 },
-      { type: 'set', path: '$', key: '$$hello' },
-      { type: 'add', path: '$.$$hello', index: 0 },
-    ]);
-
-    unsub();
+    unsub1();
   });
 
   it('changeInfo test for counter', async function () {
     type TestDoc = { cnt: Counter };
     const doc = new Document<TestDoc>('test-doc');
-    type EventForTest = Array<OperationInfo>;
-    const eventCollector = new EventCollector<EventForTest>();
-    const stub = sinon.stub().callsFake((event) => {
-      eventCollector.add(event.value.operations);
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    const expectedOps: Array<OperationInfo> = [];
+    const ops: Array<OperationInfo> = [];
+
+    const stub1 = sinon.stub().callsFake((event: DocEvent) => {
+      if (event.type !== DocEventType.LocalChange) return;
+      const { operations } = event.value;
+      ops.push(...operations);
     });
-    const unsub = doc.subscribe(stub);
+    const unsub1 = doc.subscribe(stub1);
 
     doc.update((root) => {
       root.cnt = new Counter(CounterType.IntegerCnt, 0);
+      expectedOps.push({ type: 'set', path: '$', key: 'cnt' });
       root.cnt.increase(1);
+      expectedOps.push({ type: 'increase', path: '$.cnt', value: 1 });
       root.cnt.increase(10);
+      expectedOps.push({ type: 'increase', path: '$.cnt', value: 10 });
       root.cnt.increase(-3);
+      expectedOps.push({ type: 'increase', path: '$.cnt', value: -3 });
     });
+    await waitStubCallCount(stub1, 1);
+    assert.deepEqual(
+      ops,
+      expectedOps,
+      `actual: ${JSON.stringify(ops)} \n expected: ${JSON.stringify(
+        expectedOps,
+      )}`,
+    );
 
-    await eventCollector.waitAndVerifyNthEvent(1, [
-      { type: 'set', path: '$', key: 'cnt' },
-      { type: 'increase', path: '$.cnt', value: 1 },
-      { type: 'increase', path: '$.cnt', value: 10 },
-      { type: 'increase', path: '$.cnt', value: -3 },
-    ]);
-
-    unsub();
+    unsub1();
   });
 
   it('support TypeScript', function () {
@@ -1044,68 +1072,85 @@ describe('Document', function () {
 
   it('changeInfo test for text', async function () {
     type TestDoc = { text: Text };
+
     const doc = new Document<TestDoc>('test-doc');
-    type EventForTest = Array<OperationInfo>;
-    const eventCollector = new EventCollector<EventForTest>();
-    const stub = sinon.stub().callsFake((event) => {
-      eventCollector.add(event.value.operations);
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    const expectedOps: Array<OperationInfo> = [];
+    const ops: Array<OperationInfo> = [];
+    const stub1 = sinon.stub().callsFake((event: DocEvent) => {
+      if (event.type !== DocEventType.LocalChange) return;
+      const { operations } = event.value;
+      ops.push(...operations);
     });
-    const unsub = doc.subscribe(stub);
+    const unsub1 = doc.subscribe(stub1);
 
     doc.update((root) => {
       root.text = new Text();
+      expectedOps.push({ type: 'set', path: '$', key: 'text' });
       root.text.edit(0, 0, 'hello world');
-    });
-
-    await eventCollector.waitAndVerifyNthEvent(1, [
-      { type: 'set', path: '$', key: 'text' },
-      {
+      expectedOps.push({
         type: 'edit',
         path: '$.text',
         from: 0,
         to: 0,
         value: { attributes: {}, content: 'hello world' },
-      },
-    ]);
+      });
+    });
+    await waitStubCallCount(stub1, 1);
+    assert.deepEqual(
+      ops,
+      expectedOps,
+      `actual: ${JSON.stringify(ops)} \n expected: ${JSON.stringify(
+        expectedOps,
+      )}`,
+    );
 
-    unsub();
+    unsub1();
   });
 
   it('changeInfo test for text with attributes', async function () {
     type TestDoc = { textWithAttr: Text };
     const doc = new Document<TestDoc>('test-doc');
-    type EventForTest = Array<OperationInfo>;
-    const eventCollector = new EventCollector<EventForTest>();
-    const stub = sinon.stub().callsFake((event) => {
-      eventCollector.add(event.value.operations);
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    const expectedOps: Array<OperationInfo> = [];
+    const ops: Array<OperationInfo> = [];
+    const stub1 = sinon.stub().callsFake((event: DocEvent) => {
+      if (event.type !== DocEventType.LocalChange) return;
+      const { operations } = event.value;
+      ops.push(...operations);
     });
-    const unsub = doc.subscribe(stub);
+    const unsub1 = doc.subscribe(stub1);
 
     doc.update((root) => {
       root.textWithAttr = new Text();
+      expectedOps.push({ type: 'set', path: '$', key: 'textWithAttr' });
       root.textWithAttr.edit(0, 0, 'hello world');
-      root.textWithAttr.setStyle(0, 1, { bold: 'true' });
-    });
-
-    await eventCollector.waitAndVerifyNthEvent(1, [
-      { type: 'set', path: '$', key: 'textWithAttr' },
-      {
+      expectedOps.push({
         type: 'edit',
         path: '$.textWithAttr',
         from: 0,
         to: 0,
         value: { attributes: {}, content: 'hello world' },
-      },
-      {
+      });
+      root.textWithAttr.setStyle(0, 1, { bold: 'true' });
+      expectedOps.push({
         type: 'style',
         path: '$.textWithAttr',
         from: 0,
         to: 1,
         value: { attributes: { bold: 'true' } },
-      },
-    ]);
+      });
+    });
+    await waitStubCallCount(stub1, 1);
+    assert.deepEqual(
+      ops,
+      expectedOps,
+      `actual: ${JSON.stringify(ops)} \n expected: ${JSON.stringify(
+        expectedOps,
+      )}`,
+    );
 
-    unsub();
+    unsub1();
   });
 
   it('insert elements before a specific node of array', function () {

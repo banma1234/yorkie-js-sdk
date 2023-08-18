@@ -6,12 +6,13 @@ import {
   toDocKey,
 } from '@yorkie-js-sdk/test/integration/integration_helper';
 import {
-  EventCollector,
+  waitStubCallCount,
   assertThrowsAsync,
 } from '@yorkie-js-sdk/test/helper/helper';
 import type { CRDTElement } from '@yorkie-js-sdk/src/document/crdt/element';
 import {
   DocumentStatus,
+  DocEvent,
   DocEventType,
 } from '@yorkie-js-sdk/src/document/document';
 import { OperationInfo } from '@yorkie-js-sdk/src/document/operation/operation';
@@ -64,14 +65,13 @@ describe('Document', function () {
     const d2 = new yorkie.Document<{ k1: string }>(docKey);
     await c1.attach(d1);
     await c2.attach(d2);
-
-    const eventCollectorD1 = new EventCollector();
-    const eventCollectorD2 = new EventCollector();
+    const d1Events: Array<string> = [];
+    const d2Events: Array<string> = [];
     const stub1 = sinon.stub().callsFake((event) => {
-      eventCollectorD1.add(event.type);
+      d1Events.push(event.type);
     });
     const stub2 = sinon.stub().callsFake((event) => {
-      eventCollectorD2.add(event.type);
+      d2Events.push(event.type);
     });
     const unsub1 = d1.subscribe(stub1);
     const unsub2 = d2.subscribe(stub2);
@@ -80,8 +80,10 @@ describe('Document', function () {
       root['k1'] = 'v1';
     });
 
-    await eventCollectorD2.waitAndVerifyNthEvent(1, DocEventType.LocalChange);
-    await eventCollectorD1.waitAndVerifyNthEvent(1, DocEventType.RemoteChange);
+    await waitStubCallCount(stub2, 1);
+    assert.equal(d2Events.pop(), DocEventType.LocalChange);
+    await waitStubCallCount(stub1, 1);
+    assert.equal(d1Events.pop(), DocEventType.RemoteChange);
     assert.equal(d1.toSortedJSON(), d2.toSortedJSON());
 
     unsub1();
@@ -115,20 +117,17 @@ describe('Document', function () {
     const d2 = new yorkie.Document<TestDoc>(docKey);
     await c1.attach(d1);
     await c2.attach(d2);
-
-    type EventForTest = {
-      type: DocEventType;
-      value: Array<OperationInfo>;
+    const events1: Array<OperationInfo> = [];
+    let expectedEvents1: Array<OperationInfo> = [];
+    const events2: Array<OperationInfo> = [];
+    let expectedEvents2: Array<OperationInfo> = [];
+    const pushEvent = (event: DocEvent, events: Array<OperationInfo>) => {
+      if (event.type !== DocEventType.RemoteChange) return;
+      const { operations } = event.value;
+      events.push(...operations);
     };
-    let expectedEventValue: Array<OperationInfo>;
-    const eventCollectorD1 = new EventCollector<EventForTest>();
-    const eventCollectorD2 = new EventCollector<EventForTest>();
-    const stub1 = sinon.stub().callsFake((event) => {
-      eventCollectorD1.add({ type: event.type, value: event.value.operations });
-    });
-    const stub2 = sinon.stub().callsFake((event) => {
-      eventCollectorD2.add({ type: event.type, value: event.value.operations });
-    });
+    const stub1 = sinon.stub().callsFake((event) => pushEvent(event, events1));
+    const stub2 = sinon.stub().callsFake((event) => pushEvent(event, events2));
     const unsub1 = d1.subscribe(stub1);
     const unsub2 = d2.subscribe(stub2);
 
@@ -151,45 +150,40 @@ describe('Document', function () {
       };
       root.obj.score = { science: 100 };
       delete root.obj.food;
-    });
-    expectedEventValue = [
-      { type: 'set', path: '$', key: 'counter' },
-      { type: 'set', path: '$', key: 'todos' },
-      { type: 'add', path: '$.todos', index: 0 },
-      { type: 'add', path: '$.todos', index: 1 },
-      { type: 'add', path: '$.todos', index: 2 },
-      { type: 'set', path: '$', key: 'content' },
-      {
-        type: 'edit',
-        from: 0,
-        to: 0,
-        value: {
-          attributes: { italic: true, objAttr: { key1: { key2: 'value' } } },
-          content: 'hello world',
+      expectedEvents2 = [
+        { type: 'set', path: '$', key: 'counter' },
+        { type: 'set', path: '$', key: 'todos' },
+        { type: 'add', path: '$.todos', index: 0 },
+        { type: 'add', path: '$.todos', index: 1 },
+        { type: 'add', path: '$.todos', index: 2 },
+        { type: 'set', path: '$', key: 'content' },
+        {
+          type: 'edit',
+          from: 0,
+          to: 0,
+          value: {
+            attributes: { italic: true, objAttr: { key1: { key2: 'value' } } },
+            content: 'hello world',
+          },
+          path: '$.content',
         },
-        path: '$.content',
-      },
-      { type: 'set', path: '$', key: 'obj' },
-      { type: 'set', path: '$.obj', key: 'name' },
-      { type: 'set', path: '$.obj', key: 'age' },
-      { type: 'set', path: '$.obj', key: 'food' },
-      { type: 'add', path: '$.obj.food', index: 0 },
-      { type: 'add', path: '$.obj.food', index: 1 },
-      { type: 'set', path: '$.obj', key: 'score' },
-      { type: 'set', path: '$.obj.score', key: 'english' },
-      { type: 'set', path: '$.obj.score', key: 'math' },
-      { type: 'set', path: '$.obj', key: 'score' },
-      { type: 'set', path: '$.obj.score', key: 'science' },
-      { type: 'remove', path: '$.obj', key: 'food' },
-    ];
-    await eventCollectorD1.waitAndVerifyNthEvent(1, {
-      type: DocEventType.LocalChange,
-      value: expectedEventValue,
+        { type: 'set', path: '$', key: 'obj' },
+        { type: 'set', path: '$.obj', key: 'name' },
+        { type: 'set', path: '$.obj', key: 'age' },
+        { type: 'set', path: '$.obj', key: 'food' },
+        { type: 'add', path: '$.obj.food', index: 0 },
+        { type: 'add', path: '$.obj.food', index: 1 },
+        { type: 'set', path: '$.obj', key: 'score' },
+        { type: 'set', path: '$.obj.score', key: 'english' },
+        { type: 'set', path: '$.obj.score', key: 'math' },
+        { type: 'set', path: '$.obj', key: 'score' },
+        { type: 'set', path: '$.obj.score', key: 'science' },
+        { type: 'remove', path: '$.obj', key: 'food' },
+      ];
     });
-    await eventCollectorD2.waitAndVerifyNthEvent(1, {
-      type: DocEventType.RemoteChange,
-      value: expectedEventValue,
-    });
+
+    await waitStubCallCount(stub1, 1);
+    await waitStubCallCount(stub2, 1);
 
     d2.update((root) => {
       root.counter.increase(1);
@@ -198,33 +192,41 @@ describe('Document', function () {
       const currItem = root.todos.getElementByIndex!(0);
       root.todos.moveAfter!(prevItem.getID!(), currItem.getID!());
       root.content.setStyle(0, 5, { bold: true });
+      expectedEvents1 = [
+        { type: 'increase', path: '$.counter', value: 1 },
+        { type: 'add', path: '$.todos', index: 3 },
+        {
+          type: 'move',
+          path: '$.todos',
+          index: 1,
+          previousIndex: 0,
+        },
+        {
+          type: 'style',
+          from: 0,
+          to: 5,
+          value: { attributes: { bold: true } },
+          path: '$.content',
+        },
+      ];
     });
-    expectedEventValue = [
-      { type: 'increase', path: '$.counter', value: 1 },
-      { type: 'add', path: '$.todos', index: 3 },
-      {
-        type: 'move',
-        path: '$.todos',
-        index: 1,
-        previousIndex: 0,
-      },
-      {
-        type: 'style',
-        from: 0,
-        to: 5,
-        value: { attributes: { bold: true } },
-        path: '$.content',
-      },
-    ];
-    await eventCollectorD1.waitAndVerifyNthEvent(2, {
-      type: DocEventType.RemoteChange,
-      value: expectedEventValue,
-    });
-    await eventCollectorD2.waitAndVerifyNthEvent(2, {
-      type: DocEventType.LocalChange,
-      value: expectedEventValue,
-    });
+    await waitStubCallCount(stub1, 2);
+    await waitStubCallCount(stub2, 2);
     assert.equal(d1.toSortedJSON(), d2.toSortedJSON());
+    assert.deepEqual(
+      events1,
+      expectedEvents1,
+      `d1 event actual: ${JSON.stringify(
+        events1,
+      )} \n expected: ${JSON.stringify(expectedEvents1)}`,
+    );
+    assert.deepEqual(
+      events2,
+      expectedEvents2,
+      `d2 event actual: ${JSON.stringify(
+        events2,
+      )} \n expected: ${JSON.stringify(expectedEvents2)}`,
+    );
     unsub1();
     unsub2();
 
@@ -249,20 +251,21 @@ describe('Document', function () {
     const d2 = new yorkie.Document<TestDoc>(docKey);
     await c1.attach(d1);
     await c2.attach(d2);
-
-    type EventForTest = Array<OperationInfo>;
-    const eventCollector = new EventCollector<EventForTest>();
-    const eventCollectorForTodos = new EventCollector<EventForTest>();
-    const eventCollectorForCounter = new EventCollector<EventForTest>();
-    const stub = sinon.stub().callsFake((event) => {
-      eventCollector.add(event.value.operations);
-    });
-    const stubTodo = sinon.stub().callsFake((event) => {
-      eventCollectorForTodos.add(event.value.operations);
-    });
-    const stubCounter = sinon.stub().callsFake((event) => {
-      eventCollectorForCounter.add(event.value.operations);
-    });
+    let events: Array<OperationInfo> = [];
+    let todoEvents: Array<OperationInfo> = [];
+    let counterEvents: Array<OperationInfo> = [];
+    const pushEvent = (event: DocEvent, events: Array<OperationInfo>) => {
+      if (event.type !== DocEventType.RemoteChange) return;
+      const { operations } = event.value;
+      events.push(...operations);
+    };
+    const stub = sinon.stub().callsFake((event) => pushEvent(event, events));
+    const stubTodo = sinon
+      .stub()
+      .callsFake((event) => pushEvent(event, todoEvents));
+    const stubCounter = sinon
+      .stub()
+      .callsFake((event) => pushEvent(event, counterEvents));
     const unsub = d1.subscribe(stub);
     const unsubTodo = d1.subscribe('$.todos', stubTodo);
     const unsubCounter = d1.subscribe('$.counter', stubCounter);
@@ -271,54 +274,63 @@ describe('Document', function () {
       root.counter = new yorkie.Counter(yorkie.IntType, 0);
       root.todos = ['todo1', 'todo2'];
     });
-    await eventCollector.waitAndVerifyNthEvent(1, [
+    await waitStubCallCount(stub, 1);
+    await waitStubCallCount(stubTodo, 1);
+    assert.deepEqual(events, [
       { type: 'set', path: '$', key: 'counter' },
       { type: 'set', path: '$', key: 'todos' },
       { type: 'add', path: '$.todos', index: 0 },
       { type: 'add', path: '$.todos', index: 1 },
     ]);
-    await eventCollectorForTodos.waitAndVerifyNthEvent(1, [
+    assert.deepEqual(todoEvents, [
       { type: 'add', path: '$.todos', index: 0 },
       { type: 'add', path: '$.todos', index: 1 },
     ]);
+    events = [];
+    todoEvents = [];
 
     d2.update((root) => {
       root.counter.increase(10);
     });
-    await eventCollector.waitAndVerifyNthEvent(2, [
+    await waitStubCallCount(stub, 2);
+    await waitStubCallCount(stubCounter, 1);
+    assert.deepEqual(events, [
       { type: 'increase', path: '$.counter', value: 10 },
     ]);
-    await eventCollectorForCounter.waitAndVerifyNthEvent(1, [
+    assert.deepEqual(counterEvents, [
       { type: 'increase', path: '$.counter', value: 10 },
     ]);
+    events = [];
+    counterEvents = [];
 
     d2.update((root) => {
       root.todos.push('todo3');
     });
-    await eventCollector.waitAndVerifyNthEvent(3, [
-      { type: 'add', path: '$.todos', index: 2 },
-    ]);
-    await eventCollectorForTodos.waitAndVerifyNthEvent(2, [
-      { type: 'add', path: '$.todos', index: 2 },
-    ]);
+    await waitStubCallCount(stub, 3);
+    await waitStubCallCount(stubTodo, 2);
+    assert.deepEqual(events, [{ type: 'add', path: '$.todos', index: 2 }]);
+    assert.deepEqual(todoEvents, [{ type: 'add', path: '$.todos', index: 2 }]);
+    events = [];
+    todoEvents = [];
 
     unsubTodo();
     d2.update((root) => {
       root.todos.push('todo4');
     });
-    await eventCollector.waitAndVerifyNthEvent(4, [
-      { type: 'add', path: '$.todos', index: 3 },
-    ]);
-    assert.equal(eventCollectorForTodos.getLength(), 2); // No events after unsubscribing `$.todos`
+    await waitStubCallCount(stub, 4);
+    assert.deepEqual(events, [{ type: 'add', path: '$.todos', index: 3 }]);
+    assert.deepEqual(todoEvents, []);
+    events = [];
 
     unsubCounter();
     d2.update((root) => {
       root.counter.increase(10);
     });
-    await eventCollector.waitAndVerifyNthEvent(5, [
+    await waitStubCallCount(stub, 5);
+    assert.deepEqual(events, [
       { type: 'increase', path: '$.counter', value: 10 },
     ]);
-    assert.equal(eventCollectorForCounter.getLength(), 1); // No events after unsubscribing `$.counter`
+    assert.deepEqual(counterEvents, []);
 
     unsub();
     await c1.detach(d1);
@@ -345,20 +357,21 @@ describe('Document', function () {
     const d2 = new yorkie.Document<TestDoc>(docKey);
     await c1.attach(d1);
     await c2.attach(d2);
-
-    type EventForTest = Array<OperationInfo>;
-    const eventCollector = new EventCollector<EventForTest>();
-    const eventCollectorForTodos0 = new EventCollector<EventForTest>();
-    const eventCollectorForObjC1 = new EventCollector<EventForTest>();
-    const stub = sinon.stub().callsFake((event) => {
-      eventCollector.add(event.value.operations);
-    });
-    const stubTodo = sinon.stub().callsFake((event) => {
-      eventCollectorForTodos0.add(event.value.operations);
-    });
-    const stubObj = sinon.stub().callsFake((event) => {
-      eventCollectorForObjC1.add(event.value.operations);
-    });
+    let events: Array<OperationInfo> = [];
+    let todoEvents: Array<OperationInfo> = [];
+    let objEvents: Array<OperationInfo> = [];
+    const pushEvent = (event: DocEvent, events: Array<OperationInfo>) => {
+      if (event.type !== DocEventType.RemoteChange) return;
+      const { operations } = event.value;
+      events.push(...operations);
+    };
+    const stub = sinon.stub().callsFake((event) => pushEvent(event, events));
+    const stubTodo = sinon
+      .stub()
+      .callsFake((event) => pushEvent(event, todoEvents));
+    const stubObj = sinon
+      .stub()
+      .callsFake((event) => pushEvent(event, objEvents));
     const unsub = d1.subscribe(stub);
     const unsubTodo = d1.subscribe('$.todos.0', stubTodo);
     const unsubObj = d1.subscribe('$.obj.c1', stubObj);
@@ -369,7 +382,10 @@ describe('Document', function () {
         c1: { name: 'josh', age: 14 },
       };
     });
-    await eventCollector.waitAndVerifyNthEvent(1, [
+    await waitStubCallCount(stub, 1);
+    await waitStubCallCount(stubTodo, 1);
+    await waitStubCallCount(stubObj, 1);
+    assert.deepEqual(events, [
       { type: 'set', path: '$', key: 'todos' },
       { type: 'add', path: '$.todos', index: 0 },
       { type: 'set', path: '$.todos.0', key: 'text' },
@@ -379,52 +395,60 @@ describe('Document', function () {
       { type: 'set', path: '$.obj.c1', key: 'name' },
       { type: 'set', path: '$.obj.c1', key: 'age' },
     ]);
-    await eventCollectorForTodos0.waitAndVerifyNthEvent(1, [
+    assert.deepEqual(todoEvents, [
       { type: 'set', path: '$.todos.0', key: 'text' },
       { type: 'set', path: '$.todos.0', key: 'completed' },
     ]);
-    await eventCollectorForObjC1.waitAndVerifyNthEvent(1, [
+    assert.deepEqual(objEvents, [
       { type: 'set', path: '$.obj.c1', key: 'name' },
       { type: 'set', path: '$.obj.c1', key: 'age' },
     ]);
+    events = [];
+    todoEvents = [];
+    objEvents = [];
 
     d2.update((root) => {
       root.obj.c1.name = 'john';
     });
-    await eventCollector.waitAndVerifyNthEvent(2, [
+    await waitStubCallCount(stub, 2);
+    await waitStubCallCount(stubObj, 1);
+    assert.deepEqual(events, [{ type: 'set', path: '$.obj.c1', key: 'name' }]);
+    assert.deepEqual(objEvents, [
       { type: 'set', path: '$.obj.c1', key: 'name' },
     ]);
-    await eventCollectorForObjC1.waitAndVerifyNthEvent(2, [
-      { type: 'set', path: '$.obj.c1', key: 'name' },
-    ]);
+    events = [];
+    objEvents = [];
 
     d2.update((root) => {
       root.todos[0].completed = true;
     });
-    await eventCollector.waitAndVerifyNthEvent(3, [
+    await waitStubCallCount(stub, 3);
+    await waitStubCallCount(stubTodo, 2);
+    assert.deepEqual(events, [
       { type: 'set', path: '$.todos.0', key: 'completed' },
     ]);
-    await eventCollectorForTodos0.waitAndVerifyNthEvent(2, [
+    assert.deepEqual(todoEvents, [
       { type: 'set', path: '$.todos.0', key: 'completed' },
     ]);
+    events = [];
+    todoEvents = [];
 
     unsubTodo();
     d2.update((root) => {
       root.todos[0].text = 'todo_1';
     });
-    await eventCollector.waitAndVerifyNthEvent(4, [
-      { type: 'set', path: '$.todos.0', key: 'text' },
-    ]);
-    assert.equal(eventCollectorForTodos0.getLength(), 2); // No events after unsubscribing `$.todos.0`
+    await waitStubCallCount(stub, 4);
+    assert.deepEqual(events, [{ type: 'set', path: '$.todos.0', key: 'text' }]);
+    assert.deepEqual(todoEvents, []);
+    events = [];
 
     unsubObj();
     d2.update((root) => {
       root.obj.c1.age = 15;
     });
-    await eventCollector.waitAndVerifyNthEvent(5, [
-      { type: 'set', path: '$.obj.c1', key: 'age' },
-    ]);
-    assert.equal(eventCollectorForObjC1.getLength(), 2); // No events after unsubscribing `$.obj.c1`
+    await waitStubCallCount(stub, 5);
+    assert.deepEqual(events, [{ type: 'set', path: '$.obj.c1', key: 'age' }]);
+    assert.deepEqual(objEvents, []);
 
     unsub();
     await c1.detach(d1);

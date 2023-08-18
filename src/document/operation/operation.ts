@@ -31,29 +31,10 @@ export type OperationInfo =
   | ObjectOperationInfo
   | TreeOperationInfo;
 
-/**
- * `TextOperationInfo` represents the OperationInfo for the yorkie.Text.
- */
 export type TextOperationInfo = EditOpInfo | StyleOpInfo | SelectOpInfo;
-
-/**
- * `CounterOperationInfo` represents the OperationInfo for the yorkie.Counter.
- */
 export type CounterOperationInfo = IncreaseOpInfo;
-
-/**
- * `ArrayOperationInfo` represents the OperationInfo for the JSONArray.
- */
 export type ArrayOperationInfo = AddOpInfo | RemoveOpInfo | MoveOpInfo;
-
-/**
- * `ObjectOperationInfo` represents the OperationInfo for the JSONObject.
- */
 export type ObjectOperationInfo = SetOpInfo | RemoveOpInfo;
-
-/**
- * `TreeOperationInfo` represents the OperationInfo for the yorkie.Tree.
- */
 export type TreeOperationInfo = TreeEditOpInfo | TreeStyleOpInfo;
 
 /**

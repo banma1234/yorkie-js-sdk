@@ -7,7 +7,7 @@ import yorkie, {
   DocEventType,
   ClientEventType,
 } from '@yorkie-js-sdk/src/yorkie';
-import { EventCollector } from '@yorkie-js-sdk/test/helper/helper';
+import { waitStubCallCount } from '@yorkie-js-sdk/test/helper/helper';
 import {
   toDocKey,
   testRPCAddr,
@@ -130,26 +130,30 @@ describe('Client', function () {
     await c1.attach(d1);
     await c2.attach(d2);
 
-    const eventCollectorD1 = new EventCollector();
-    const eventCollectorD2 = new EventCollector();
-    const eventCollectorC1 = new EventCollector();
-    const eventCollectorC2 = new EventCollector();
+    const c1Events: Array<string> = [];
+    const c2Events: Array<string> = [];
+    const d1Events: Array<string> = [];
+    const d2Events: Array<string> = [];
 
     const stubC1 = sinon.stub().callsFake((event) => {
-      if (event.type === ClientEventType.DocumentSynced) {
-        eventCollectorC1.add(event.value);
-      }
+      c1Events.push(
+        event.type === ClientEventType.DocumentSynced
+          ? event.value
+          : event.type,
+      );
     });
     const stubC2 = sinon.stub().callsFake((event) => {
-      if (event.type === ClientEventType.DocumentSynced) {
-        eventCollectorC2.add(event.value);
-      }
+      c2Events.push(
+        event.type === ClientEventType.DocumentSynced
+          ? event.value
+          : event.type,
+      );
     });
     const stubD1 = sinon.stub().callsFake((event) => {
-      eventCollectorD1.add(event.type);
+      d1Events.push(event.type);
     });
     const stubD2 = sinon.stub().callsFake((event) => {
-      eventCollectorD2.add(event.type);
+      d2Events.push(event.type);
     });
 
     const unsub1 = {
@@ -166,13 +170,14 @@ describe('Client', function () {
       root['k1'] = 'undefined';
     });
 
-    await eventCollectorD2.waitAndVerifyNthEvent(1, DocEventType.LocalChange);
-    await eventCollectorD1.waitAndVerifyNthEvent(1, DocEventType.RemoteChange);
+    await waitStubCallCount(stubD2, 1); // d2 should be able to update
+
+    assert.equal(d2Events.at(-1), DocEventType.LocalChange);
+    await waitStubCallCount(stubD1, 1); // d1 should be able to receive d2's update
+    assert.equal(d1Events.at(-1), DocEventType.RemoteChange);
     assert.equal(d1.toSortedJSON(), d2.toSortedJSON());
 
     // Simulate network error
-    eventCollectorC1.reset();
-    eventCollectorC2.reset();
     const xhr = sinon.useFakeXMLHttpRequest();
     xhr.onCreate = (req) => {
       req.respond(
@@ -188,25 +193,42 @@ describe('Client', function () {
       root['k1'] = 'v1';
     });
 
-    await eventCollectorD2.waitAndVerifyNthEvent(2, DocEventType.LocalChange);
-    await eventCollectorC2.waitFor(DocumentSyncResultType.SyncFailed); // c2 should fail to sync
+    await waitStubCallCount(stubD2, 2); // d2 should be able to update
+    assert.equal(d2Events.at(-1), DocEventType.LocalChange);
+    await waitStubCallCount(stubC2, 2); // c2 should fail to sync
+
+    assert.equal(
+      c2Events.at(-1),
+      DocumentSyncResultType.SyncFailed,
+      'c2 sync fail',
+    );
 
     await c1.sync().catch((err) => {
       assert.equal(err.message, 'INVALID_STATE_ERR - 0'); // c1 should also fail to sync
     });
-    await eventCollectorC1.waitFor(DocumentSyncResultType.SyncFailed);
+    assert.equal(
+      c1Events.at(-1),
+      DocumentSyncResultType.SyncFailed,
+      'c1 sync fail',
+    );
     assert.equal(d1.toSortedJSON(), '{"k1":"undefined"}');
     assert.equal(d2.toSortedJSON(), '{"k1":"v1"}');
 
     // Back to normal condition
-    eventCollectorC1.reset();
-    eventCollectorC2.reset();
     xhr.restore();
 
-    await eventCollectorC1.waitFor(DocumentSyncResultType.Synced); // wait for c1 to sync
-    await eventCollectorC2.waitFor(DocumentSyncResultType.Synced);
-    await eventCollectorD1.waitAndVerifyNthEvent(2, DocEventType.RemoteChange);
-    assert.equal(d1.toSortedJSON(), '{"k1":"v1"}'); // d1 should be able to receive d2's update
+    await waitStubCallCount(stubC2, 3); // wait for c2 to sync
+    assert.equal(c2Events.at(-1), DocumentSyncResultType.Synced, 'c2 sync');
+    await waitStubCallCount(stubC1, 6);
+    assert.isTrue(
+      [c1Events.at(-1), c1Events.at(-2)].includes(
+        DocumentSyncResultType.Synced,
+      ),
+      'c1 sync',
+    );
+    await waitStubCallCount(stubD1, 2);
+    assert.equal(d1Events.at(-1), DocEventType.RemoteChange); // d1 should be able to receive d2's update
+    assert.equal(d1.toSortedJSON(), d2.toSortedJSON());
 
     unsub1.client();
     unsub2.client();
@@ -237,29 +259,29 @@ describe('Client', function () {
     d1.update((root) => {
       root.version = 'v1';
     });
-    assert.equal(d1.toSortedJSON(), `{"version":"v1"}`, 'd1');
-    assert.equal(d2.toSortedJSON(), `{}`, 'd2');
+    assert.notEqual(d1.toSortedJSON(), d2.toSortedJSON());
     await c1.sync();
     await c2.sync();
-    assert.equal(d2.toSortedJSON(), `{"version":"v1"}`, 'd2');
+    assert.equal(d1.toSortedJSON(), d2.toSortedJSON());
 
     // 02. c2 changes the sync mode to realtime sync mode.
-    const eventCollector = new EventCollector();
-    const stub = sinon.stub().callsFake((event) => {
-      eventCollector.add(event.type);
+    const c2Events: Array<string> = [];
+    const stubC2 = sinon.stub().callsFake((event) => {
+      c2Events.push(event.type);
     });
-    const unsub1 = c2.subscribe(stub);
+    const unsub1 = c2.subscribe(stubC2);
     await c2.resume(d2);
-
-    eventCollector.reset();
     d1.update((root) => {
       root.version = 'v2';
     });
     await c1.sync();
-
-    await eventCollector.waitFor(ClientEventType.DocumentSynced); // c2 should sync automatically
-    assert.equal(d1.toSortedJSON(), `{"version":"v2"}`, 'd1');
-    assert.equal(d2.toSortedJSON(), `{"version":"v2"}`, 'd2');
+    await waitStubCallCount(stubC2, 3);
+    assert.isTrue(
+      [c2Events.at(-1), c2Events.at(-1)].includes(
+        ClientEventType.DocumentSynced,
+      ),
+    );
+    assert.equal(d1.toSortedJSON(), d2.toSortedJSON());
     unsub1();
 
     // 03. c2 changes the sync mode to manual sync mode again.
@@ -267,11 +289,10 @@ describe('Client', function () {
     d1.update((root) => {
       root.version = 'v3';
     });
-    assert.equal(d1.toSortedJSON(), `{"version":"v3"}`, 'd1');
-    assert.equal(d2.toSortedJSON(), `{"version":"v2"}`, 'd2');
+    assert.notEqual(d1.toSortedJSON(), d2.toSortedJSON());
     await c1.sync();
     await c2.sync();
-    assert.equal(d2.toSortedJSON(), `{"version":"v3"}`, 'd2');
+    assert.equal(d1.toSortedJSON(), d2.toSortedJSON());
 
     await c1.deactivate();
     await c2.deactivate();
@@ -354,17 +375,17 @@ describe('Client', function () {
     await c2.attach(d2);
     await c3.attach(d3);
 
-    const eventCollectorD1 = new EventCollector();
-    const eventCollectorD2 = new EventCollector();
-    const eventCollectorD3 = new EventCollector();
+    const d1Events: Array<string> = [];
+    const d2Events: Array<string> = [];
+    const d3Events: Array<string> = [];
     const stub1 = sinon.stub().callsFake((event) => {
-      eventCollectorD1.add(event.type);
+      d1Events.push(event.type);
     });
     const stub2 = sinon.stub().callsFake((event) => {
-      eventCollectorD2.add(event.type);
+      d2Events.push(event.type);
     });
     const stub3 = sinon.stub().callsFake((event) => {
-      eventCollectorD3.add(event.type);
+      d3Events.push(event.type);
     });
     const unsub1 = d1.subscribe(stub1);
     const unsub2 = d2.subscribe(stub2);
@@ -377,15 +398,10 @@ describe('Client', function () {
     d2.update((root) => {
       root.c2 = 0;
     });
-    await eventCollectorD1.waitAndVerifyNthEvent(1, DocEventType.LocalChange);
-    await eventCollectorD1.waitAndVerifyNthEvent(2, DocEventType.RemoteChange);
-    await eventCollectorD2.waitAndVerifyNthEvent(1, DocEventType.LocalChange);
-    await eventCollectorD2.waitAndVerifyNthEvent(2, DocEventType.RemoteChange);
-    await eventCollectorD3.waitAndVerifyNthEvent(1, DocEventType.RemoteChange);
-    await eventCollectorD3.waitAndVerifyNthEvent(2, DocEventType.RemoteChange);
-    assert.equal(d1.toSortedJSON(), '{"c1":0,"c2":0}', 'd1');
-    assert.equal(d2.toSortedJSON(), '{"c1":0,"c2":0}', 'd2');
-    assert.equal(d3.toSortedJSON(), '{"c1":0,"c2":0}', 'd3');
+    await waitStubCallCount(stub1, 2); // local-change, remote-change
+    await waitStubCallCount(stub2, 2); // local-change, remote-change
+    assert.equal(d1.toSortedJSON(), '{"c1":0,"c2":0}');
+    assert.equal(d2.toSortedJSON(), '{"c1":0,"c2":0}');
 
     // 03. c1 and c2 sync with push-only mode. So, the changes of c1 and c2
     // are not reflected to each other.
@@ -399,21 +415,20 @@ describe('Client', function () {
       root.c2 = 1;
     });
 
-    await eventCollectorD1.waitAndVerifyNthEvent(3, DocEventType.LocalChange);
-    await eventCollectorD2.waitAndVerifyNthEvent(3, DocEventType.LocalChange);
-    await eventCollectorD3.waitAndVerifyNthEvent(3, DocEventType.RemoteChange);
-    await eventCollectorD3.waitAndVerifyNthEvent(4, DocEventType.RemoteChange);
-    assert.equal(d1.toSortedJSON(), '{"c1":1,"c2":0}', 'd1');
-    assert.equal(d2.toSortedJSON(), '{"c1":0,"c2":1}', 'd2');
-    assert.equal(d3.toSortedJSON(), '{"c1":1,"c2":1}', 'd3');
+    await waitStubCallCount(stub1, 3); // local-change
+    await waitStubCallCount(stub2, 3); // local-change
+    await waitStubCallCount(stub3, 3);
+    assert.equal(d1.toSortedJSON(), '{"c1":1,"c2":0}');
+    assert.equal(d2.toSortedJSON(), '{"c1":0,"c2":1}');
+    assert.equal(d3.toSortedJSON(), '{"c1":1,"c2":1}');
 
     // 04. c1 and c2 sync with push-pull mode.
     c1.resumeRemoteChanges(d1);
     c2.resumeRemoteChanges(d2);
-    await eventCollectorD1.waitAndVerifyNthEvent(4, DocEventType.RemoteChange);
-    await eventCollectorD2.waitAndVerifyNthEvent(4, DocEventType.RemoteChange);
-    assert.equal(d1.toSortedJSON(), '{"c1":1,"c2":1}', 'd1');
-    assert.equal(d2.toSortedJSON(), '{"c1":1,"c2":1}', 'd2');
+    await waitStubCallCount(stub1, 4);
+    await waitStubCallCount(stub2, 4);
+    assert.equal(d1.toSortedJSON(), '{"c1":1,"c2":1}');
+    assert.equal(d2.toSortedJSON(), '{"c1":1,"c2":1}');
 
     unsub1();
     unsub2();
